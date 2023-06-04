@@ -6,20 +6,36 @@ from torch.autograd import Variable
 from genotypes import PRIMITIVES
 from genotypes import Genotype
 
+def random_shuffle(x):
+    batchsize, num_channels, height, width = x.data.size()
+    indices = torch.randperm(num_channels)
+    x = x[:,indices]
 
 class MixedOp(nn.Module):
 
-    def __init__(self, C, stride):
-        super(MixedOp, self).__init__()
-        self._ops = nn.ModuleList()
-        for primitive in PRIMITIVES:
-            op = OPS[primitive](C, stride, False)
-            if 'pool' in primitive:
-                op = nn.Sequential(op, nn.BatchNorm2d(C, affine=False))
-            self._ops.append(op)
+  def __init__(self, C, stride):
+    super(MixedOp, self).__init__()
+    self._ops = nn.ModuleList()
+    self.mp = nn.MaxPool2d(2,2)
 
-    def forward(self, x, weights):
-        return sum(w * op(x) for w, op in zip(weights, self._ops))
+    for primitive in PRIMITIVES:
+      op = OPS[primitive](C //4, stride, False)
+      if 'pool' in primitive:
+        op = nn.Sequential(op, nn.BatchNorm2d(C //4, affine=False))
+      self._ops.append(op)
+
+  def forward(self, x, weights):
+    random_shuffle(x)
+    dim_2 = x.shape[1]
+    xtemp = x[ : , :  dim_2//4, :, :]
+    xtemp2 = x[ : ,  dim_2//4:, :, :]
+    temp1 = sum(w * op(xtemp) for w, op in zip(weights, self._ops))
+    if temp1.shape[2] == x.shape[2]:
+      ans = torch.cat([temp1,xtemp2],dim=1)
+    else:
+      ans = torch.cat([temp1,self.mp(xtemp2)], dim=1)
+
+    return ans
 
 
 class Cell(nn.Module):
